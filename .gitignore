@@ -1,0 +1,7 @@
+out/
+dist/
+deps/
+stage/
+pkg/*.exe
+pkg/*.dll
+out_build.txt
