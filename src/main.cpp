@@ -479,7 +479,7 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView> {
     {
         if (m_duke && m_gameMode) Toast(L"Game controls. View = pointer. Hold View + Menu = Game Vault");
         else if (m_gameMode) Toast(L"Game controls. View = pointer");
-        else Toast(L"Pointer: left stick, A click, B back. View = game controls");
+        else Toast(L"Pointer: left stick, A click, B back, X full screen. View = game controls");
     }
 
     void SendKey(const Key& k, bool down)
@@ -613,6 +613,49 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView> {
         }
     }
 
+    // X (pointer mode): the page's biggest video or player fills the screen, X again brings the page back. Players
+    // asked for it for TV sites (MyRetroTvs, Discord 11-25) whose full-screen button is small or wants a keyboard
+    // key. Run through DevTools as a user gesture, the way a click is, so the page lets it go full screen. The
+    // player is an <iframe> on many sites (YouTube embeds): the page itself may put its own iframe full screen.
+    void FullScreen()
+    {
+        static const wchar_t kScript[] =
+            L"(()=>{const d=document;"
+            L"if(d.fullscreenElement){d.exitFullscreen();return 'off';}"
+            L"let best=null,area=0;"
+            L"for(const e of d.querySelectorAll('video,iframe,canvas,embed,object')){"
+            L"const r=e.getBoundingClientRect();const a=r.width*r.height;"
+            L"if(r.width>=160&&r.height>=90&&a>area&&getComputedStyle(e).visibility!=='hidden'){best=e;area=a;}}"
+            L"const t=best||d.documentElement;"
+            L"(t.requestFullscreen||t.webkitRequestFullscreen).call(t);"
+            L"return 'on '+t.tagName;})()";
+        // the script holds no double quote or backslash, so it goes into the JSON as it is
+        std::wstring j = L"{\"expression\":\"" + std::wstring(kScript) + L"\",\"userGesture\":true,\"returnByValue\":true}";
+        m_web.CallDevToolsProtocolMethodAsync(L"Runtime.evaluate", j).Completed(
+            [](auto const& op, AsyncStatus s) {
+                std::wstring r = s == AsyncStatus::Completed ? std::wstring(op.GetResults()) : L"(no answer)";
+                Log(L"X: full screen: " + r.substr(0, 200));
+            });
+    }
+
+    // Test hook: LocalState\web_press.txt (put there through the Device Portal) holding "X" presses X once, so the
+    // full-screen button can be checked without a controller. The file is removed after it is read.
+    ULONGLONG m_pressCheck = 0;
+    void PressHook()
+    {
+        ULONGLONG now = GetTickCount64();
+        if (now - m_pressCheck < 1000 || !m_web) return;
+        m_pressCheck = now;
+        std::wstring p = std::wstring(ApplicationData::Current().LocalFolder().Path()) + L"\\web_press.txt";
+        FILE* f = _wfopen(p.c_str(), L"rb");
+        if (!f) return;
+        char c = 0;
+        fread(&c, 1, 1, f);
+        fclose(f);
+        _wremove(p.c_str());
+        if (c == 'X' || c == 'x') FullScreen();
+    }
+
     void Pad()
     {
         auto pads = Gamepad::Gamepads();
@@ -698,6 +741,7 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView> {
             }
             if (pressed & 2048) { if (m_web.CanGoForward()) m_web.GoForward(); }   // RB
             if (pressed & 32) m_web.Reload();                                      // Y
+            if (pressed & 16) FullScreen();                                        // X
         }
         m_btnWas = b;
     }
@@ -709,6 +753,7 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView> {
         while (!m_quitting) {
             d.ProcessEvents(CoreProcessEventsOption::ProcessAllIfPresent);
             Pad();
+            PressHook();
             Sleep(16);
         }
     }
